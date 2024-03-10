@@ -165,7 +165,12 @@ def main():
     setup_tqdm_logger(level=logging.INFO)
     args = parse_args()
     getAndWriteAll(
-        args.output_dir, args.identifier_type, args.start, args.end, args.chunk_size, args.rate_limit
+        args.output_dir,
+        args.identifier_type,
+        args.start,
+        args.end,
+        args.chunk_size,
+        args.rate_limit,
     )
 
 
