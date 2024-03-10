@@ -1,0 +1,4 @@
+beautifulsoup4~=4.12.3
+tqdm~=4.66.2
+
+git+https://github.com/qwrwed/utils-python.git
