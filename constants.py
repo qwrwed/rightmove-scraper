@@ -8,3 +8,4 @@ KNOWN_IDENTIFIER_TYPES = {
 }
 DEFAULT_JSON_CHUNK_DIR = Path("./data/json_chunks")
 DEFAULT_JSON_FULL_DIR = Path("./data/json_full")
+DEFAULT_JSON_DUPES_DIR = Path("./data/json_dupes")
