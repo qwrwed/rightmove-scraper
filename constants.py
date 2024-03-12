@@ -1,11 +1,17 @@
 from pathlib import Path
 
-KNOWN_IDENTIFIER_TYPES = {
+SEARCH_URL = (
+    "https://www.rightmove.co.uk/property-to-rent/find.html?locationIdentifier={}"
+)
+
+AREA_PATTERN = r"Properties (?:To Rent|For Sale) (?:in|near) {}, (.*?)(:?, within .*)?$"
+
+IDENTIFIER_TYPES = {
     "STATION",
     "REGION",
     "OUTCODE",
     "POSTCODE",
 }
-DEFAULT_JSON_CHUNK_DIR = Path("./data/json_chunks")
-DEFAULT_JSON_FULL_DIR = Path("./data/json_full")
-DEFAULT_JSON_DUPES_DIR = Path("./data/json_dupes")
+IDENTIFIER_SEP = "^"
+
+DEFAULT_DATA_ROOT = Path("./data")

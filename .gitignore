@@ -163,4 +163,4 @@ cython_debug/
 
 
 # project-specific paths
-data/
+data*/

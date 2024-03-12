@@ -6,16 +6,13 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 from tqdm import tqdm
-from utils_python import (
-    dump_data,
-    make_get_request_to_url,
-    make_parent_dir,
-    setup_tqdm_logger,
-)
+from utils_python import dump_data, make_get_request_to_url, setup_tqdm_logger
 
-from constants import DEFAULT_JSON_CHUNK_DIR, KNOWN_IDENTIFIER_TYPES
+from constants import DEFAULT_DATA_ROOT, IDENTIFIER_TYPES, SEARCH_URL
+from utils import get_area_from_soup, get_name_from_soup
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_CHUNK_DIR = Path(DEFAULT_DATA_ROOT, "json_chunks")
 
 
 class ArgsNamespace(Namespace):
@@ -36,10 +33,10 @@ def parse_args():
         "--type",
         dest="identifier_type",
         default="STATION",
-        choices=KNOWN_IDENTIFIER_TYPES,
+        choices=IDENTIFIER_TYPES,
     )
     parser.add_argument("-c", "--chunk-size", type=int, default=100)
-    parser.add_argument("-o", "--output-dir", type=Path, default=DEFAULT_JSON_CHUNK_DIR)
+    parser.add_argument("-o", "--output-dir", type=Path, default=DEFAULT_CHUNK_DIR)
     parser.add_argument(
         "-r",
         "--rate-limit",
@@ -53,45 +50,38 @@ def parse_args():
     return args
 
 
-def get_name(identifier: str, min_delay: float | None = None):
-    url = f"https://www.rightmove.co.uk/property-for-sale/find.html?locationIdentifier={identifier}"
-    html = make_get_request_to_url(url, delay=min_delay)
-    if not html:
-        return None
-    soup = BeautifulSoup(html, "html.parser")
-    input_soup = soup.find_all("input", {"class": "input--full"})
-    if len(input_soup) != 1:
-        raise NotImplementedError(
-            f"Unexpected number of inputs (expected 1): {input_soup!r}"
-        )
-    [input_element] = input_soup
-    input_value = input_element.get("value")
-
-    return input_value
-
-
-MAP_DIRECTIONS = {"name_to_identifier", "identifier_to_name"}
+def get_identifier_url(identifier: str):
+    return SEARCH_URL.format(identifier)
 
 
 def getChunk(
     identifier_type: str, i_start: int, i_end: int, min_delay: float | None = None
 ):
     LOGGER.info(f"Getting {identifier_type} [{i_start}, {i_end})")
-    maps: dict[str, dict[str, str]] = {k: {} for k in MAP_DIRECTIONS}
-
+    results = []
     for i in (pbar := tqdm(range(i_start, i_end))):
         identifier = f"{identifier_type}^{i}"
         pbar.set_description(identifier)
-        name = get_name(identifier, min_delay)
-        if name:
-            LOGGER.debug("%s -> %s", identifier, name)
-            maps["identifier_to_name"][identifier] = name
-            maps["name_to_identifier"][name] = identifier
 
-    if not any(maps.values()):
-        return None
+        url = get_identifier_url(identifier)
+        html = make_get_request_to_url(url, delay=min_delay)
+        if not html:
+            continue
+        soup = BeautifulSoup(html, "html.parser")
 
-    return maps
+        result = {
+            "identifier": identifier,
+            "identifier_parts": {
+                "type": identifier_type,
+                "index": i,
+            },
+            "url": url,
+            "name": get_name_from_soup(soup),
+            "area": get_area_from_soup(soup),
+        }
+
+        results.append(result)
+    return results
 
 
 def getAndWriteAll(
@@ -109,17 +99,10 @@ def getAndWriteAll(
         if not chunk:
             break
         range_str = f"{chunk_start:08}_{chunk_end-1:08}"
-        make_path = lambda map_direction: Path(
-            identifier_type, map_direction, range_str
-        ).with_suffix(".json")
+        filepath = Path(output_dir, identifier_type, range_str).with_suffix(".json")
+        LOGGER.info("Writing %i values to '%s'", len(chunk), filepath)
 
-        LOGGER.info(
-            "Writing %i values to '%s'", len(list(chunk.values())[0]), make_path("*")
-        )
-        for map_direction, map_contents in chunk.items():
-            filepath = Path(output_dir, make_path(map_direction))
-            make_parent_dir(filepath)
-            dump_data(map_contents, filepath)
+        dump_data(chunk, filepath)
 
         chunk_start = chunk_end
 
