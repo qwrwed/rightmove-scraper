@@ -120,28 +120,11 @@ def get_next_chunk(output_dir: Path, identifier_type: str):
         # folder doesn't exist
         return 0
     all_files = set()
-    files_in_directions = defaultdict(set)
-    for map_direction_dir in identifier_type_dir.iterdir():
-        if not map_direction_dir.is_dir():
-            continue
-        for path in map_direction_dir.glob("*.json"):
-            name = path.name
-            files_in_directions[map_direction_dir.name].add(name)
-            all_files.add(name)
-    if len(files_in_directions) < len(MAP_DIRECTIONS):
-        # at least one of the directions has no files
-        return 0
-    elif (found_directions := set(files_in_directions.keys())) != MAP_DIRECTIONS:
-        raise ValueError(f"{found_directions=} doesn't match known {MAP_DIRECTIONS=}")
-    missing_files = all_files - set.intersection(*files_in_directions.values())
-    if missing_files:
-        earliest_missing_filename = min(missing_files)
-        chunk_start, chunk_end = get_chunk_range(earliest_missing_filename)
-        return chunk_start
-    else:
-        latest_found_filename = max(all_files)
-        chunk_start, chunk_end = get_chunk_range(latest_found_filename)
-        return chunk_end + 1
+    for path in identifier_type_dir.glob("*.json"):
+        all_files.add(path.name)
+    latest_found_filename = max(all_files)
+    chunk_start, chunk_end = get_chunk_range(latest_found_filename)
+    return chunk_end + 1
 
 
 def main():
