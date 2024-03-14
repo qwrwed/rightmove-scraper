@@ -1,18 +1,35 @@
 import logging
 import re
+import xml.etree.ElementTree as ET
 from argparse import ArgumentParser, Namespace
-from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from bs4 import BeautifulSoup
+from requests import HTTPError
 from tqdm import tqdm
-from utils_python import dump_data, make_get_request_to_url, setup_tqdm_logger
+from utils_python import (
+    dump_data,
+    make_get_request_to_url,
+    serialize_data,
+    setup_tqdm_logger,
+)
 
-from constants import DEFAULT_DATA_ROOT, IDENTIFIER_TYPES, SEARCH_URL
-from utils import get_area_from_soup, get_name_from_soup
+from utils import (
+    DEFAULT_DATA_ROOT,
+    get_area_from_soup,
+    get_area_from_text,
+    get_name_from_soup,
+)
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CHUNK_DIR = Path(DEFAULT_DATA_ROOT, "json_chunks")
+IDENTIFIER_TYPES = {
+    "STATION",
+    "REGION",
+    "OUTCODE",
+    "POSTCODE",
+}
 
 
 class ArgsNamespace(Namespace):
@@ -46,65 +63,12 @@ def parse_args():
     )
     args = parser.parse_args(namespace=ArgsNamespace())
     if args.start is None:
-        args.start = get_next_chunk(args.output_dir, args.identifier_type)
+        args.start = get_next_chunk_to_scrape(args.output_dir, args.identifier_type)
     return args
 
 
-def get_identifier_url(identifier: str):
-    return SEARCH_URL.format(identifier)
-
-
-def getChunk(
-    identifier_type: str, i_start: int, i_end: int, min_delay: float | None = None
-):
-    LOGGER.info(f"Getting {identifier_type} [{i_start}, {i_end})")
-    results = []
-    for i in (pbar := tqdm(range(i_start, i_end))):
-        identifier = f"{identifier_type}^{i}"
-        pbar.set_description(identifier)
-
-        url = get_identifier_url(identifier)
-        html = make_get_request_to_url(url, delay=min_delay)
-        if not html:
-            continue
-        soup = BeautifulSoup(html, "html.parser")
-
-        result = {
-            "identifier": identifier,
-            "identifier_parts": {
-                "type": identifier_type,
-                "index": i,
-            },
-            "url": url,
-            "name": get_name_from_soup(soup),
-            "area": get_area_from_soup(soup),
-        }
-
-        results.append(result)
-    return results
-
-
-def getAndWriteAll(
-    output_dir: Path,
-    identifier_type: str,
-    start=0,
-    end=None,
-    chunk_size=100,
-    min_delay: float | None = None,
-):
-    chunk_start = start
-    while chunk_start < (end or float("inf")):
-        chunk_end = chunk_start + chunk_size
-        chunk = getChunk(identifier_type, chunk_start, chunk_end, min_delay)
-        if not chunk:
-            break
-        range_str = f"{chunk_start:08}_{chunk_end-1:08}"
-        filepath = Path(output_dir, identifier_type, range_str).with_suffix(".json")
-        LOGGER.info("Writing %i values to '%s'", len(chunk), filepath)
-
-        dump_data(chunk, filepath)
-
-        chunk_start = chunk_end
+PROPERTY_CHANNELS = {"RENT": "property-to-rent", "BUY": "property-for-sale"}
+DEFAULT_CHANNEL = "RENT"
 
 
 def get_chunk_range(range_str: str):
@@ -114,7 +78,7 @@ def get_chunk_range(range_str: str):
     return None, None
 
 
-def get_next_chunk(output_dir: Path, identifier_type: str):
+def get_next_chunk_to_scrape(output_dir: Path, identifier_type: str):
     identifier_type_dir = Path(output_dir, identifier_type)
     if not identifier_type_dir.is_dir():
         # folder doesn't exist
@@ -127,16 +91,143 @@ def get_next_chunk(output_dir: Path, identifier_type: str):
     return chunk_end + 1
 
 
+@dataclass
+class RightmoveScraper:
+    output_dir: Path
+    location_type: str
+    min_delay: float | None = 1
+    use_api = True
+    channel = DEFAULT_CHANNEL
+    all_known_indices: set[str] | None = None
+
+    def __post_init__(self):
+        assert self.channel in PROPERTY_CHANNELS
+        assert self.location_type in IDENTIFIER_TYPES
+        if self.location_type == "STATION":
+            xml_path = Path("xml/sitemap-stations-ALL.xml")
+            if not xml_path.is_file():
+                return
+            tree = ET.parse(xml_path)
+            namespace = {"": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+            self.all_known_indices = set()
+            for url in tree.getroot().findall(".//url", namespace):
+                loc_element = url.find("loc", namespace)
+                if loc_element is None:
+                    continue
+                loc_text = loc_element.text.strip()
+                self.all_known_indices.add(
+                    int(re.search(r"STATION%5E(\d+)", loc_text).group(1))
+                )
+            print(len(self.all_known_indices))
+
+    def getAndWriteAll(
+        self,
+        start=0,
+        end=None,
+        chunk_size=100,
+    ):
+        chunk_start = start
+        if end is None:
+            if self.all_known_indices is not None:
+                end = max(self.all_known_indices)
+            else:
+                end = float("inf")
+        while chunk_start < end:
+            chunk_end = chunk_start + chunk_size
+            chunk = self.getChunk(chunk_start, chunk_end)
+            if chunk:
+                range_str = f"{chunk_start:08}_{chunk_end-1:08}"
+                filepath = Path(
+                    self.output_dir, self.location_type, range_str
+                ).with_suffix(".json")
+                LOGGER.info("Writing %i values to '%s'", len(chunk), filepath)
+                dump_data(chunk, filepath)
+            chunk_start = chunk_end
+
+    def getChunk(
+        self,
+        i_start: int,
+        i_end: int,
+    ):
+        results = []
+        for i in tqdm(range(i_start, i_end), desc=f"{i_start}-{i_end-1}"):
+            if self.all_known_indices and i not in self.all_known_indices:
+                continue
+            if self.use_api:
+                result = self.getOneAPI(i)
+            else:
+                result = self.getOneScrape(i)
+            if result:
+                results.append(result)
+        return results
+
+    def getUrlAPI(self, identifier):
+        return f"https://www.rightmove.co.uk/api/_search?locationIdentifier={identifier}&channel={self.channel}"
+
+    def getUrlScrape(self, identifier):
+        return f"https://www.rightmove.co.uk/{PROPERTY_CHANNELS[self.channel]}/find.html?locationIdentifier={identifier}"
+
+    def getOneScrape(self, location_index: int):
+        identifier = f"{self.location_type}^{location_index}"
+
+        url = self.getUrlScrape(identifier)
+        try:
+            html = make_get_request_to_url(url, min_delay=self.min_delay)
+        except HTTPError as exc:
+            if exc.response.status_code in {404}:
+                return None
+        soup = BeautifulSoup(html, "html.parser")
+
+        result = {
+            "identifier": identifier,
+            "name": get_name_from_soup(soup),
+            "area": get_area_from_soup(soup),
+            "type": self.location_type,
+            "index": location_index,
+            "url": url,
+            "url_api": self.getUrlAPI(identifier),
+        }
+        return result
+
+    def getOneAPI(self, location_index: int):
+        identifier = f"{self.location_type}^{location_index}"
+        url = self.getUrlAPI(identifier)
+        try:
+            res = make_get_request_to_url(
+                url, min_delay=self.min_delay, parse_json=True
+            )
+        except HTTPError as exc:
+            if exc.response.status_code in {404}:
+                return None
+            raise
+        retrieved_result = res["location"]
+        result = {
+            "identifier": identifier,
+            "name": retrieved_result["shortDisplayName"],
+            "area": get_area_from_text(
+                retrieved_result["displayName"],
+                retrieved_result["shortDisplayName"],
+            ),
+            "type": retrieved_result["locationType"],
+            "index": retrieved_result["id"],
+            "url": self.getUrlScrape(identifier),
+            "url_api": url,
+        }
+        return result
+
+
 def main():
     setup_tqdm_logger(level=logging.INFO)
     args = parse_args()
-    getAndWriteAll(
+    rightmove_scraper = RightmoveScraper(
         args.output_dir,
         args.identifier_type,
+        args.rate_limit,
+    )
+    rightmove_scraper.getAndWriteAll(
         args.start,
         args.end,
         args.chunk_size,
-        args.rate_limit,
     )
 
 

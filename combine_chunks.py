@@ -6,8 +6,8 @@ from pathlib import Path
 from tqdm import tqdm
 from utils_python import dump_data, read_list_from_file, setup_root_logger
 
-from constants import DEFAULT_DATA_ROOT
 from get_chunks import DEFAULT_CHUNK_DIR
+from utils import DEFAULT_DATA_ROOT
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_COMBINED_DIR = Path(DEFAULT_DATA_ROOT, "json_combined")
