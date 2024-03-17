@@ -193,9 +193,7 @@ class RightmoveScraper:
         identifier = f"{self.location_type}^{location_index}"
         url = self.getUrlAPI(identifier)
         try:
-            res = make_get_request_to_url(
-                url, min_delay=self.min_delay, parse_json=True
-            )
+            res = make_get_request_to_url(url, min_delay=self.min_delay, format="json")
         except HTTPError as exc:
             if exc.response.status_code in {404}:
                 return None
