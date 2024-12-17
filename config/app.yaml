@@ -4,6 +4,7 @@ sitemap:
   types: ["stations"]
   # overwrite: true
 location:
+  use_sitemap: False
   relative_dir: "json_results"
   location_type: "STATION"
   use_api: False
@@ -11,3 +12,4 @@ location:
   min_seconds_between_requests: 2
 mappings:
   relative_dir: "json_mappings"
+  key: "name"

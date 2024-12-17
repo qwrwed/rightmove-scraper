@@ -41,6 +41,7 @@ class LocationConfig(SubConfig):
     location_type: LocationType
     min_seconds_between_requests: float = 1.0
     use_api: bool = False
+    use_sitemap: bool = False
 
 
 class MappingsConfig(SubConfig):
@@ -80,6 +81,7 @@ def make_rightmove_location_scraper(
         location_type=config.location_type,
         min_seconds_between_requests=config.min_seconds_between_requests,
         sitemap_dir=sitemap_dir,
+        use_sitemap=config.use_sitemap,
     )
 
 

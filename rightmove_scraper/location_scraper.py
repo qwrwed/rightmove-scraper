@@ -8,7 +8,7 @@ from functools import lru_cache
 from itertools import count
 from math import isinf
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Iterable, TypedDict
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -18,7 +18,7 @@ from utils_python import (
     dump_data,
     make_get_request_to_url,
     print_tqdm,
-    read_list_from_file,
+    read_dict_from_file,
 )
 
 from rightmove_scraper.utils import snake_to_camel_case
@@ -140,7 +140,7 @@ class ResultDict(TypedDict):
     type: LocationType
     url: str
     # url_api: str
-    closest_property: tuple[float, float]
+    closest_property_coords: tuple[float, float] | None
 
 
 def get_chunk_range_from_string(range_str: str) -> tuple[int, int]:
@@ -149,17 +149,19 @@ def get_chunk_range_from_string(range_str: str) -> tuple[int, int]:
         return int(search.group(1)), int(search.group(2))
     raise ValueError(f"Couldn't get range from {range_str}")
 
-def get_json_model_from_soup(soup: BeautifulSoup):
+
+def get_json_model_from_soup(soup: BeautifulSoup) -> dict[str, Any]:
     json_model_scripts = soup.find_all("script", string=re.compile("^window.jsonModel"))
     assert len(json_model_scripts) == 1
     json_model_text = json_model_scripts[0].text
     match = re.search(r"window.jsonModel\s*\s*=\s*(.*)$", json_model_text)
     assert match is not None
     model = match.group(1)
-    model_json = json.loads(model)
+    model_json: dict[str, Any] = json.loads(model)
     return model_json
 
-def get_closest_property_coords(json_model):
+
+def get_closest_property_coords(json_model: dict[str, Any]) -> tuple[float, float] | None:
     if properties := json_model["properties"]:
         distance_loc_map = {
             (
@@ -172,6 +174,7 @@ def get_closest_property_coords(json_model):
     else:
         return None
 
+
 @dataclass
 class RightmoveLocationScraper:
     output_dir: Path
@@ -181,23 +184,25 @@ class RightmoveLocationScraper:
     channel = Channel.RENT
     all_known_indices: set[int] | None = None
     sitemap_dir: Path | None = None
+    use_sitemap: bool = False
     query = {
         "sort_type": 4,
         "radius": 40.0,
     }
 
     def __post_init__(self) -> None:
-        if self.sitemap_dir and self.location_type is LocationType.STATION:
+        if self.sitemap_dir and self.location_type is LocationType.STATION and self.use_sitemap:
             # currently only supports station sitemap, which has identifiers
-            # TODO: problem: some stations may now be present on the website but not in the sitemaps (e.g. Abbey Wood)
+            # problem: some stations may now be present on the website but not in the sitemaps (e.g. Abbey Wood)
+            #  `use_sitemap = False` works around this
             known_indices = get_indices_from_sitemaps(self.sitemap_dir, self.location_type)
             if known_indices:
                 self.all_known_indices = known_indices
 
-    def get_one(self, i: int):
+    def get_one(self, i: int) -> ResultDict | None:
         if self.use_api:
+            # return self.get_one_api(i)
             raise NotImplementedError
-            return self.get_one_api(i)
         else:
             return self.get_one_scrape(i)
 
@@ -211,26 +216,30 @@ class RightmoveLocationScraper:
         end_index: int | float | None = None,
     ) -> None:
 
-        results = []
+        results = {}
         if start_index is None:
             start_index = 0
             if self.location_filepath.is_file():
-                results = read_list_from_file(self.location_filepath)
+                results = read_dict_from_file(self.location_filepath)
                 if results:
-                    latest_index = max(e["index"] for e in results)
+                    latest_index = self.identifier_to_index(max(results.keys(), key=self.identifier_to_index))
                     start_index = latest_index + 1
-
+        iterator: Iterable[int]
         if end_index is None or isinf(end_index):
             if end_index is None and self.all_known_indices:
                 iterator = sorted(list(self.all_known_indices))
                 iterator = [i for i in iterator if i >= start_index]
             else:
                 iterator = count(start_index)
+        else:
+            assert not isinstance(end_index, float), f'Invalid float {end_index=} - only float("inf") is supported'
+            iterator = range(start_index, end_index)
 
         for current_index in (pbar := tqdm(iterator)):
-            pbar.set_description(self.get_identifier(current_index))
+            identifier = self.get_identifier(current_index)
+            pbar.set_description(identifier)
             result = self.get_one(current_index)
-            results.append(result)
+            results[identifier] = result
             dump_data(results, self.location_filepath)
 
     def get_url_api(
@@ -247,6 +256,10 @@ class RightmoveLocationScraper:
 
     def get_identifier(self, location_index: int) -> str:
         return f"{self.location_type}^{location_index}"
+
+    @staticmethod
+    def identifier_to_index(identifier: str) -> int:
+        return int(identifier.split("^")[1])
 
     def get_one_scrape(
         self,
@@ -278,33 +291,33 @@ class RightmoveLocationScraper:
         }
         return result
 
-    def get_one_api(
-        self,
-        location_index: int,
-    ) -> ResultDict | None:
-        identifier = self.get_identifier(location_index)
-        url = self.get_url_api(identifier)
-        try:
-            res = make_get_request_to_url(
-                url,
-                min_delay=self.min_seconds_between_requests,
-                format="json",
-            )
-        except HTTPError as exc:
-            if exc.response.status_code in {404}:
-                return None
-            raise
-        retrieved_result = res["location"]
-        result: ResultDict = {
-            "identifier": identifier,
-            "name": retrieved_result["shortDisplayName"],
-            "area": get_area_from_text(
-                retrieved_result["displayName"],
-                retrieved_result["shortDisplayName"],
-            ),
-            "type": retrieved_result["locationType"],
-            "index": retrieved_result["id"],
-            "url": self.get_url_scrape(identifier),
-            "url_api": url,
-        }
-        return result
+    # def get_one_api(
+    #     self,
+    #     location_index: int,
+    # ) -> ResultDict | None:
+    #     identifier = self.get_identifier(location_index)
+    #     url = self.get_url_api(identifier)
+    #     try:
+    #         res = make_get_request_to_url(
+    #             url,
+    #             min_delay=self.min_seconds_between_requests,
+    #             format="json",
+    #         )
+    #     except HTTPError as exc:
+    #         if exc.response.status_code in {404}:
+    #             return None
+    #         raise
+    #     retrieved_result = res["location"]
+    #     result: ResultDict = {
+    #         "identifier": identifier,
+    #         "name": retrieved_result["shortDisplayName"],
+    #         "area": get_area_from_text(
+    #             retrieved_result["displayName"],
+    #             retrieved_result["shortDisplayName"],
+    #         ),
+    #         "type": retrieved_result["locationType"],
+    #         "index": retrieved_result["id"],
+    #         "url": self.get_url_scrape(identifier),
+    #         "url_api": url,
+    #     }
+    #     return result
