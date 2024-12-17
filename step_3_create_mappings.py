@@ -32,7 +32,7 @@ if __name__ == "__main__":
     setup_tqdm_logger(level=logging.INFO)
     _args = get_base_args()
     _config = Config.from_file(_args.app_config_path)
-    for _input_filepath in _config.chunks_combined.dir.glob("*.json"):
+    for _input_filepath in _config.location.dir.glob("*.json"):
         write_mappings_from_file(
             _input_filepath,
             output_dir=_config.mappings.dir,

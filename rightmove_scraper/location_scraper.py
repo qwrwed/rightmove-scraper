@@ -4,14 +4,22 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
+from itertools import count
+from math import isinf
 from pathlib import Path
+from pprint import pprint
 from typing import Any, Iterable, TypedDict
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
 from requests import HTTPError
 from tqdm import tqdm
-from utils_python import dump_data, make_get_request_to_url, read_list_from_file,print_tqdm
+from utils_python import (
+    dump_data,
+    make_get_request_to_url,
+    print_tqdm,
+    read_list_from_file,
+)
 
 from rightmove_scraper.utils import snake_to_camel_case
 
@@ -149,7 +157,6 @@ class RightmoveLocationScraper:
     use_api = False
     channel = Channel.RENT
     all_known_indices: set[int] | None = None
-    chunk_size: int = 100
     sitemap_dir: Path | None = None
     query = {
         "sort_type": 4,
@@ -159,92 +166,48 @@ class RightmoveLocationScraper:
     def __post_init__(self) -> None:
         if self.sitemap_dir and self.location_type is LocationType.STATION:
             # currently only supports station sitemap, which has identifiers
+            # TODO: problem: some stations may now be present on the website but not in the sitemaps (e.g. Abbey Wood)
             known_indices = get_indices_from_sitemaps(self.sitemap_dir, self.location_type)
             if known_indices:
                 self.all_known_indices = known_indices
 
-    def get_filtered_indices(
-        self,
-        i_start: int,
-        i_end: int,
-    ) -> Iterable[int]:
-        chunk_indices: Iterable[int] = range(i_start, i_end)
-        if self.all_known_indices is not None:
-            chunk_indices = [i for i in chunk_indices if i in self.all_known_indices]
-        return chunk_indices
-
-    def get_next_to_scrape(self) -> tuple[int, int]:
-        location_type_dir = Path(self.output_dir, self.location_type)
-        if not location_type_dir.is_dir():
-            # folder doesn't exist
-            return 0, 0
-        all_files = set()
-        for path in location_type_dir.glob("*.json"):
-            all_files.add(path.name)
-        if not all_files:
-            # folder is empty
-            return 0, 0
-
-        latest_found_filename = max(all_files)
-        contents = read_list_from_file(Path(location_type_dir, latest_found_filename))
-        latest_index = max(e["index"] for e in contents)
-
-        chunk_start, chunk_end = get_chunk_range_from_string(latest_found_filename)
-        chunk_indices = self.get_filtered_indices(chunk_start, chunk_end)
-        remaining_indices = [i for i in chunk_indices if i > latest_index]
-
-        if remaining_indices:
-            next_chunk_start_index, next_scrape_index = chunk_start, min(remaining_indices)
+    def get_one(self, i: int):
+        if self.use_api:
+            return self.get_one_api(i)
         else:
-            next_chunk_start_index, next_scrape_index = chunk_end + 1, chunk_end + 1
-        return next_chunk_start_index, next_scrape_index
+            return self.get_one_scrape(i)
 
-    def get_and_write_chunk(
-        self,
-        i_start: int,
-        i_end: int,
-        scrape_start: int | None = None,
-    ) -> None:
-        if scrape_start is None:
-            scrape_start = i_start
-        chunk = []
-        chunk_indices = self.get_filtered_indices(scrape_start, i_end)
-
-        range_str = f"{i_start:08}_{i_end-1:08}"
-        filepath = Path(self.output_dir, self.location_type, range_str).with_suffix(".json")
-
-        chunk = read_list_from_file(filepath)
-
-        for i in tqdm(chunk_indices, desc=f"{i_start}-{i_end-1}"):
-            if self.use_api:
-                result = self.get_one_api(i)
-            else:
-                result = self.get_one_scrape(i)
-            if result:
-                chunk.append(result)
-                dump_data(chunk, filepath)
-        LOGGER.info("Wrote %i values to '%s'", len(chunk), filepath)
+    @property
+    def location_filepath(self) -> Path:
+        return Path(self.output_dir, f"{self.location_type}-all").with_suffix(".json")
 
     def get_and_write_all(
         self,
         start_index: int | None = None,
         end_index: int | float | None = None,
     ) -> None:
-        
+
+        results = []
         if start_index is None:
-            chunk_start, scrape_start = self.get_next_to_scrape()
-        else:
-            chunk_start = scrape_start = start_index
-        if end_index is None:
-            if self.all_known_indices is not None:
-                end_index = max(self.all_known_indices)
+            start_index = 0
+            if self.location_filepath.is_file():
+                results = read_list_from_file(self.location_filepath)
+                if results:
+                    latest_index = max(e["index"] for e in results)
+                    start_index = latest_index + 1
+
+        if end_index is None or isinf(end_index):
+            if end_index is None and self.all_known_indices:
+                iterator = sorted(list(self.all_known_indices))
+                iterator = [i for i in iterator if i >= start_index]
             else:
-                end_index = float("inf")
-        assert end_index is not None  # mypy
-        while chunk_start < end_index:
-            chunk_end = chunk_start + self.chunk_size
-            self.get_and_write_chunk(chunk_start, chunk_end, scrape_start)
-            scrape_start = chunk_start = chunk_end
+                iterator = count(start_index)
+
+        for current_index in (pbar := tqdm(iterator)):
+            pbar.set_description(self.get_identifier(current_index))
+            result = self.get_one(current_index)
+            results.append(result)
+            dump_data(results, self.location_filepath)
 
     def get_url_api(
         self,
@@ -258,11 +221,14 @@ class RightmoveLocationScraper:
     ) -> str:
         return make_scrape_url(identifier, self.channel, **self.query)
 
+    def get_identifier(self, location_index: int) -> str:
+        return f"{self.location_type}^{location_index}"
+
     def get_one_scrape(
         self,
         location_index: int,
     ) -> ResultDict | None:
-        identifier = f"{self.location_type}^{location_index}"
+        identifier = self.get_identifier(location_index)
 
         url = self.get_url_scrape(identifier)
         try:
@@ -288,7 +254,7 @@ class RightmoveLocationScraper:
         self,
         location_index: int,
     ) -> ResultDict | None:
-        identifier = f"{self.location_type}^{location_index}"
+        identifier = self.get_identifier(location_index)
         url = self.get_url_api(identifier)
         try:
             res = make_get_request_to_url(

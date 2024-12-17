@@ -36,31 +36,28 @@ class SitemapConfig(SubConfig):
     root_url: str = DEFAULT_ROOT_SITEMAP_URL
 
 
-class ChunksConfig(SubConfig):
+class LocationConfig(SubConfig):
     dir: Path
     location_type: LocationType
     min_seconds_between_requests: float = 1.0
-    chunk_size: int = 100
     use_api: bool = False
 
-class ChunksCombinedConfig(SubConfig):
-    dir: Path
 
 class MappingsConfig(SubConfig):
     dir: Path
     key: str = "name"
 
+
 class Config(FileModel):
     data_dir: Path
     sitemap: SitemapConfig
-    chunks: ChunksConfig
-    chunks_combined: ChunksCombinedConfig
+    location: LocationConfig
     mappings: MappingsConfig
 
     @model_validator(mode="before")
     @classmethod
     def set_subconfig_main_path(cls, values: dict[str, Any]) -> dict[str, Any]:
-        for subconfig_key in ["sitemap", "chunks", "chunks_combined", "mappings"]:
+        for subconfig_key in ["sitemap", "location", "mappings"]:
             if values["data_dir"] and values[subconfig_key]:
                 values[subconfig_key]["_parent_dir"] = values["data_dir"]
         return values
@@ -75,14 +72,13 @@ def make_rightmove_sitemap_scraper(config: SitemapConfig) -> RightmoveSitemapScr
 
 
 def make_rightmove_location_scraper(
-    config: ChunksConfig,
+    config: LocationConfig,
     sitemap_dir: Path | None = None,
 ) -> RightmoveLocationScraper:
     return RightmoveLocationScraper(
         output_dir=config.dir,
         location_type=config.location_type,
         min_seconds_between_requests=config.min_seconds_between_requests,
-        chunk_size=config.chunk_size,
         sitemap_dir=sitemap_dir,
     )
 

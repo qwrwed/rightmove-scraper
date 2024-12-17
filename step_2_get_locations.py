@@ -24,7 +24,7 @@ def get_and_write_all(
     rightmove_sitemap_scraper.get_and_download_sitemaps()
 
     rightmove_location_scraper = make_rightmove_location_scraper(
-        config.chunks,
+        config.location,
         rightmove_sitemap_scraper.sitemap_dir,
     )
     rightmove_location_scraper.get_and_write_all(start_index, end_index)
@@ -38,8 +38,18 @@ class ArgsNamespace(BaseArgsNamespace):
 def parse_args() -> ArgsNamespace:
     parser = ArgumentParser()
     add_base_args(parser)
-    parser.add_argument("-s", "--start-index", type=int, default=None,)
-    parser.add_argument("-e", "--end-index", type=int, default=None,)
+    parser.add_argument(
+        "-s",
+        "--start-index",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "-e",
+        "--end-index",
+        type=int,
+        default=None,
+    )
     args = parser.parse_args(namespace=ArgsNamespace())
     return args
 

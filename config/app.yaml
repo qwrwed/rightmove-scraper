@@ -1,15 +1,13 @@
 data_dir: "data"
 sitemap:
-  relative_dir: "xml" 
+  relative_dir: "xml"
   types: ["stations"]
   # overwrite: true
-chunks:
-  relative_dir: "json_chunks"
+location:
+  relative_dir: "json_results"
   location_type: "STATION"
   use_api: False
   chunk_size: 100
   min_seconds_between_requests: 2
-chunks_combined:
-  relative_dir: "json_combined"
 mappings:
   relative_dir: "json_mappings"
