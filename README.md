@@ -3,20 +3,20 @@
 Generates mappings/dicts of Rightmove identifiers to the strings they represent.
 
 ## Usage
-1. Generate results, split into chunks:
+1. Retrieve sitemaps
     - ```bash
-      python ./get_chunks.py --type REGION
+      python ./step_1_get_sitemaps.py
       ```
-    - `--type` can be any of `{STATION, REGION, POSTCODE, OUTCODE}`
+2. Generate results, split into chunks:
+    - ```bash
+      python ./step_2_get_sitemaps.py
+      ```
     - Script will resume from latest chunk if interrupted.
-2. Combine chunks into single files:
+3. Combine chunks into single files:
     - ```bash
-      python ./combine_chunks.py
+      python ./step_3_combine_chunks.py
       ```
-3. Generate mappings from combined files:
+4. Generate mappings from combined files:
     - ```bash
-      python ./create_mappings.py
+      python ./step_4_create_mappings.py
       ```
-    - This will generate :
-      - one file of mappings for found names which correspond to one identifier
-      - one file of mappings for found names which correspond to multiple identifiers
