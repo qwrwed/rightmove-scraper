@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -7,8 +8,7 @@ from functools import lru_cache
 from itertools import count
 from math import isinf
 from pathlib import Path
-from pprint import pprint
-from typing import Any, Iterable, TypedDict
+from typing import Any, TypedDict
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -139,7 +139,8 @@ class ResultDict(TypedDict):
     index: int
     type: LocationType
     url: str
-    url_api: str
+    # url_api: str
+    closest_property: tuple[float, float]
 
 
 def get_chunk_range_from_string(range_str: str) -> tuple[int, int]:
@@ -148,6 +149,28 @@ def get_chunk_range_from_string(range_str: str) -> tuple[int, int]:
         return int(search.group(1)), int(search.group(2))
     raise ValueError(f"Couldn't get range from {range_str}")
 
+def get_json_model_from_soup(soup: BeautifulSoup):
+    json_model_scripts = soup.find_all("script", string=re.compile("^window.jsonModel"))
+    assert len(json_model_scripts) == 1
+    json_model_text = json_model_scripts[0].text
+    match = re.search(r"window.jsonModel\s*\s*=\s*(.*)$", json_model_text)
+    assert match is not None
+    model = match.group(1)
+    model_json = json.loads(model)
+    return model_json
+
+def get_closest_property_coords(json_model):
+    if properties := json_model["properties"]:
+        distance_loc_map = {
+            (
+                property["location"]["latitude"],
+                property["location"]["longitude"],
+            ): property["distance"]
+            for property in properties
+        }
+        return min(distance_loc_map, key=distance_loc_map.get)
+    else:
+        return None
 
 @dataclass
 class RightmoveLocationScraper:
@@ -173,6 +196,7 @@ class RightmoveLocationScraper:
 
     def get_one(self, i: int):
         if self.use_api:
+            raise NotImplementedError
             return self.get_one_api(i)
         else:
             return self.get_one_scrape(i)
@@ -239,6 +263,9 @@ class RightmoveLocationScraper:
             raise
         soup = BeautifulSoup(html, "html.parser")
 
+        json_model = get_json_model_from_soup(soup)
+        closest_property_coords = get_closest_property_coords(json_model)
+
         result: ResultDict = {
             "identifier": identifier,
             "name": get_name_from_soup(soup),
@@ -246,7 +273,8 @@ class RightmoveLocationScraper:
             "type": self.location_type,
             "index": location_index,
             "url": url,
-            "url_api": self.get_url_api(identifier),
+            # "url_api": self.get_url_api(identifier),
+            "closest_property_coords": closest_property_coords,
         }
         return result
 
